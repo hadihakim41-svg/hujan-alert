@@ -43,6 +43,15 @@ header{display:flex;align-items:center;justify-content:space-between;gap:12px}
 .brand{font:700 22px/1 var(--display);letter-spacing:-.01em;display:flex;align-items:center;gap:10px}
 .brand img{width:32px;height:32px;border-radius:9px}
 .updated{font:12px var(--mono);color:var(--muted);text-align:right}
+.world-link{display:flex;align-items:center;gap:14px;text-decoration:none;color:#e8f1f6;border-radius:14px;padding:14px 16px;
+  background:radial-gradient(120% 140% at 0% 0%,#1d4f7a 0%,#0b1f33 55%,#04080f 100%);border:1px solid rgba(160,200,230,.25)}
+.world-link .globe{flex:none;width:52px;height:52px;border-radius:50%;
+  background:radial-gradient(circle at 35% 30%,#7fc4ff 0%,#2a6db5 40%,#0d2a4d 75%);box-shadow:0 0 18px rgba(80,160,255,.45),inset -8px -6px 14px rgba(0,0,0,.5);position:relative;overflow:hidden}
+.world-link .globe::after{content:"";position:absolute;inset:0;background:radial-gradient(ellipse 40% 18% at 40% 40%,rgba(255,255,255,.7),transparent 70%),radial-gradient(ellipse 30% 14% at 70% 68%,rgba(255,255,255,.55),transparent 70%)}
+.world-link b{display:block;font:700 17px/1.2 var(--display)}
+.world-link span{font-size:13px;color:#a9c3cb}
+.world-link .go{margin-left:auto;font-size:22px;opacity:.8}
+.world-link:focus-visible{outline:3px solid var(--rain);outline-offset:2px}
 
 .loc{display:flex;flex-direction:column;gap:10px}
 .loc-row{display:flex;align-items:center;gap:8px}
@@ -186,6 +195,12 @@ footer a{color:inherit}
       <div class="legend" id="legendRadar" hidden><span><i class="lg-radar"></i>Rain seen by radar</span><span id="radarTime"></span></div>
     </div>
   </section>
+
+  <a class="world-link" href="world.html">
+    <div class="globe" aria-hidden="true"></div>
+    <div><b>3D World view</b><span>Live clouds, rain and wind across the whole globe</span></div>
+    <span class="go" aria-hidden="true">›</span>
+  </a>
 
   <section class="card">
     <h2>Next 2 hours</h2>
