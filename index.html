@@ -140,6 +140,26 @@ section.card.map-card{padding:0;overflow:hidden}
 .map-card.full .map-wrap{flex:1;min-height:0}
 .map-card.full #map{height:100%}
 body.lock{overflow:hidden}
+.cities-card h2{margin:0 0 2px}
+.city-axis,.city{display:grid;grid-template-columns:118px 1fr;gap:10px;align-items:center}
+.city-axis{margin-bottom:6px}
+.city-axis .lbls{position:relative;height:14px}
+.city-axis .lbls span{position:absolute;transform:translateX(-50%);font:10.5px var(--mono);color:var(--muted);white-space:nowrap}
+.city-axis .lbls span:first-child{transform:none}
+.cities{display:flex;flex-direction:column}
+.city{width:100%;text-align:left;background:none;border:0;border-top:1px solid var(--line);border-radius:0;padding:9px 0;font-weight:400;color:var(--fg)}
+.city:first-child{border-top:0}
+.city:hover{background:color-mix(in srgb,var(--rain-soft) 35%,transparent)}
+.city .nm{min-width:0}
+.city .nm b{display:block;font-weight:600;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.city .nm small{display:block;font-size:12px;color:var(--muted);white-space:nowrap}
+.city .nm small.wet{color:var(--rain);font-weight:600}
+.city .nm small.heavy{color:#d9534f;font-weight:600}
+.strip{display:grid;grid-template-columns:repeat(24,1fr);gap:2px;height:22px}
+.strip i{border-radius:2px;background:var(--line);opacity:.55}
+.strip i.r{opacity:1}
+.cities-note{font-size:12px;color:var(--muted);margin:10px 0 0}
+.region{font:600 11px var(--body);letter-spacing:.08em;text-transform:uppercase;color:var(--muted);padding:12px 0 4px}
 
 .bars{display:grid;gap:4px;align-items:end;height:120px}
 .bar{display:flex;flex-direction:column;justify-content:flex-end;align-items:center;height:100%;min-width:0}
@@ -206,11 +226,12 @@ footer a{color:inherit}
     <div class="map-head">
       <h2>Rain radar &amp; forecast</h2>
       <div class="map-tools">
+        <button type="button" class="tool" id="btnMy" aria-label="Show all of Malaysia">Malaysia</button>
         <button type="button" class="tool" id="btnSat" aria-pressed="false">Satellite</button>
         <button type="button" class="tool" id="btnClouds" aria-pressed="true">Clouds</button>
         <button type="button" class="tool icon" id="btnFull" aria-label="Full screen map"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path id="fullIcon" d="M2 6V2h4M14 6V2h-4M2 10v4h4M14 10v4h-4"/></svg></button>
       </div>
-      <p class="hint" id="mapHint">Live radar for the last 2 hours, forecast for the next 12</p>
+      <p class="hint" id="mapHint">Live radar for the last 2 hours, forecast for the next 24</p>
     </div>
     <div class="map-wrap">
       <div id="map" role="region" aria-label="Rain map"></div>
@@ -223,13 +244,21 @@ footer a{color:inherit}
         </button>
         <div class="track">
           <div class="track-bg" aria-hidden="true"><div class="past" id="trackPast"></div><div class="future"></div></div>
-          <input type="range" id="slider" min="-120" max="720" step="5" value="0" aria-label="Time: past radar to future forecast">
+          <input type="range" id="slider" min="-120" max="1440" step="5" value="0" aria-label="Time: past radar to future forecast">
           <div class="ticks" id="ticks"></div>
         </div>
       </div>
       <div class="legend"><span>Light</span><span class="scale" aria-hidden="true"></span><span>Very heavy</span></div>
       <p class="arrival" id="arrival"><span class="ic" aria-hidden="true">☂</span><span>Checking when rain reaches you…</span></p>
     </div>
+  </section>
+
+  <section class="card cities-card" id="citiesCard">
+    <h2>Rain across Malaysia</h2>
+    <p class="hint">When rain is expected in each town over the next 24 hours. Towns with rain soonest are at the top. Tap one to see it on the map.</p>
+    <div class="city-axis" aria-hidden="true"><span></span><div class="lbls" id="cityAxis"></div></div>
+    <div class="cities" id="cities"><p class="hint">Loading the Malaysia forecast…</p></div>
+    <p class="cities-note">Each box is one hour. Colours use the same scale as the map: light blue is light rain, green to red is heavy.</p>
   </section>
 
   <a class="world-link" href="world.html">
@@ -470,18 +499,22 @@ footer a{color:inherit}
     return { set(np){ const rebuild = np.rain!==p.rain || Math.abs(np.cloud-p.cloud)>10; p=np; if(rebuild) build(); start(); } };
   })();
 
-  /* ---------------- Rain map: live radar (past 2 h) + forecast (next 12 h) on one timeline ---------------- */
-  const FC_N = 15, FC_SPAN = 0.84;            // 15 x 15 forecast points, 0.12° (~13 km) apart, ±0.84° around the map centre
-  const PAST_MIN = -120, FUT_MIN = 720;
+  /* ---------------- Rain map: live radar (past 2 h) + forecast for all of Malaysia (next 24 h) ---------------- */
+  const PAST_MIN = -120, FUT_MIN = 1440;
+  // Whole-country grid: every 0.5° (~55 km) from 0.75°N to 7.25°N and 99.5°E to 119.5°E (Peninsula, Sarawak, Sabah)
+  const MY = { w:99.5, e:119.5, s:0.75, n:7.25, nx:41, ny:14 };
+  const MY_BOUNDS = [[0.85,99.6],[7.4,119.3]];
+  // Close-up grid around you: 15 x 15 points about 19 km apart
+  const LOC_N = 15, LOC_SPAN = 1.2;
   let map=null, baseLayer=null, satLayer=null, satLabels=null, meMarker=null, fcOverlay=null;
   let tMin = 0, playing = null, showClouds = true, useSat = false;
   const RV = { host:'', frames:[], layers:new Map() };
-  let FC = null; const fcCache = new Map(); const fcImg = new Map(); let fcLoading = false, lastFcFetch = 0;
+  let NAT = null, LOC = null; const fcImg = new Map(); let natFetchedAt = 0, locLoading = false, lastLocFetch = 0;
 
   function baseUrl(){ return 'https://{s}.basemaps.cartocdn.com/'+(darkMQ.matches?'dark_all':'light_all')+'/{z}/{x}/{y}{r}.png'; }
   function initMap(){
     if(typeof L==='undefined'){ $('map').innerHTML='<p class="hint" style="padding:16px">The map could not load. Check your internet connection.</p>'; return; }
-    map = L.map('map',{zoomControl:true, attributionControl:true, minZoom:5, maxZoom:17}).setView([3.139,101.687],9);
+    map = L.map('map',{zoomControl:true, attributionControl:true, minZoom:4, maxZoom:17, zoomSnap:0.25}).fitBounds(MY_BOUNDS, {padding:[4,4]});
     map.createPane('rain'); map.getPane('rain').style.zIndex=450; map.getPane('rain').style.pointerEvents='none';
     map.createPane('labels'); map.getPane('labels').style.zIndex=480; map.getPane('labels').style.pointerEvents='none';
     baseLayer = L.tileLayer(baseUrl(),{maxZoom:19, subdomains:'abcd', attribution:'© OpenStreetMap © CARTO'}).addTo(map);
@@ -490,16 +523,17 @@ footer a{color:inherit}
     darkMQ.addEventListener && darkMQ.addEventListener('change', ()=>{ baseLayer.setUrl(baseUrl()); fcImg.clear(); renderTime(); });
     map.attributionControl.setPrefix(false);
     map.on('zoomend', ()=>{ ensureRadarLayers(); renderTime(); });
-    map.on('moveend', maybeRegrid);
+    map.on('moveend', ()=>renderTime());
     buildTicks();
     loadRadar();
+    loadNational();
   }
-  function mapSetCenter(lat,lon,recentre){
+  function mapSetCenter(lat,lon){
     if(!map) return;
     const icon = L.divIcon({className:'', html:'<div class="me-dot"></div>', iconSize:[16,16], iconAnchor:[8,8]});
     if(!meMarker) meMarker = L.marker([lat,lon],{icon, keyboard:false, interactive:false, zIndexOffset:1000}).addTo(map); else meMarker.setLatLng([lat,lon]);
-    if(recentre) map.setView([lat,lon], 9);
-    loadForecastGrid(lat, lon, false);
+    loadLocal(lat, lon);
+    updateArrival();
   }
 
   /* ---- Live radar frames (RainViewer, every 10 minutes) ---- */
@@ -514,8 +548,7 @@ footer a{color:inherit}
     }catch(e){ RV.frames=[]; $('slider').min = 0; buildTicks(); renderTime(); }
   }
   function radarFramesToLoad(){
-    // keep within RainViewer's free limit: fewer frames when zoomed far out (more tiles on screen)
-    const z = map.getZoom(), every = z < 7 ? 3 : z < 8 ? 2 : 1;
+    const z = Math.floor(map.getZoom()), every = z < 6 ? 4 : z < 7 ? 3 : z < 8 ? 2 : 1;   // stay within RainViewer's free limit
     return RV.frames.filter((f,i)=> (RV.frames.length-1-i) % every === 0);
   }
   function ensureRadarLayers(){
@@ -532,54 +565,70 @@ footer a{color:inherit}
     return best || avail[0] || null;
   }
 
-  /* ---- Forecast grid (Open-Meteo hourly rain + cloud) ---- */
-  async function loadForecastGrid(lat, lon, quiet){
-    const key = (Math.round(lat*10)/10)+','+(Math.round(lon*10)/10);
-    const hit = fcCache.get(key);
-    if(hit && Date.now()-hit.t < 60*60*1000){ setFC(hit.g); return; }
-    if(!hit){ try{ const c = JSON.parse(localStorage.getItem('hujan_fc')||'null'); if(c && c.key===key && Date.now()-c.t < 60*60*1000){ fcCache.set(key,c); setFC(c.g); return; } }catch(e){} }
-    if(fcLoading || Date.now()-lastFcFetch < 15000) return;
-    fcLoading = true; lastFcFetch = Date.now();
-    const clat = Math.round(lat*10)/10, clon = Math.round(lon*10)/10, la=[], lo=[];
-    for(let r=0;r<FC_N;r++) for(let c=0;c<FC_N;c++){
-      la.push((clat + FC_SPAN - r*(2*FC_SPAN/(FC_N-1))).toFixed(2));
-      lo.push((clon - FC_SPAN + c*(2*FC_SPAN/(FC_N-1))).toFixed(2));
-    }
+  /* ---- Forecast grids (Open-Meteo hourly rain + cloud) ---- */
+  function gridCoords(g){ const la=[], lo=[];
+    for(let r=0;r<g.ny;r++) for(let c=0;c<g.nx;c++){ la.push((g.n - r*(g.n-g.s)/(g.ny-1)).toFixed(2)); lo.push((g.w + c*(g.e-g.w)/(g.nx-1)).toFixed(2)); }
+    return {la, lo}; }
+  async function fetchGrid(g){
+    const {la, lo} = gridCoords(g);
+    const r = await fetch('https://api.open-meteo.com/v1/forecast?latitude='+la.join(',')+'&longitude='+lo.join(',')+
+      '&hourly=precipitation,cloud_cover&forecast_hours=26&timeformat=unixtime');
+    if(!r.ok) throw new Error(r.status);
+    let j = await r.json(); if(!Array.isArray(j)) j=[j];
+    return Object.assign({}, g, { times:j[0].hourly.time, rain:j.map(p=>p.hourly.precipitation.map(v=>v||0)), cloud:j.map(p=>p.hourly.cloud_cover.map(v=>v||0)) });
+  }
+  async function loadNational(){
+    try{ const c=JSON.parse(localStorage.getItem('hujan_my')||'null'); if(c && Date.now()-c.t < 60*60*1000){ NAT=c.g; natFetchedAt=c.t; afterData(); return; } }catch(e){}
     try{
-      if(!quiet) $('arrival').lastChild.textContent='Loading forecast map…';
-      const r = await fetch('https://api.open-meteo.com/v1/forecast?latitude='+la.join(',')+'&longitude='+lo.join(',')+
-        '&hourly=precipitation,cloud_cover&forecast_hours=14&timeformat=unixtime');
-      if(!r.ok) throw new Error(r.status);
-      let j = await r.json(); if(!Array.isArray(j)) j=[j];
-      const g = { lat:clat, lon:clon, times:j[0].hourly.time, rain:j.map(p=>p.hourly.precipitation.map(v=>v||0)), cloud:j.map(p=>p.hourly.cloud_cover.map(v=>v||0)) };
-      const rec = {key, t:Date.now(), g}; fcCache.set(key, rec);
-      try{ localStorage.setItem('hujan_fc', JSON.stringify(rec)); }catch(e){}
-      setFC(g);
-    }catch(e){ $('arrival').lastChild.textContent='The forecast map could not load. It will try again soon.'; }
-    finally{ fcLoading=false; }
+      $('cities').innerHTML='<p class="hint">Loading the Malaysia forecast…</p>';
+      NAT = await fetchGrid(Object.assign({id:'my'}, MY)); natFetchedAt = Date.now();
+      try{ localStorage.setItem('hujan_my', JSON.stringify({t:natFetchedAt, g:NAT})); }catch(e){}
+      afterData();
+    }catch(e){ $('cities').innerHTML='<p class="error">The Malaysia forecast could not load. It will try again in 10 minutes.</p>'; }
   }
-  function setFC(g){ FC = g; fcImg.clear(); renderTime(); updateArrival(); }
-  function maybeRegrid(){
-    if(!FC || map.getZoom() < 7) return;
-    const c = map.getCenter();
-    if(Math.abs(c.lat-FC.lat) > 0.45 || Math.abs(c.lng-FC.lon) > 0.45) loadForecastGrid(c.lat, c.lng, true);
+  async function loadLocal(lat, lon){
+    const clat=Math.round(lat*10)/10, clon=Math.round(lon*10)/10, key=clat+','+clon;
+    if(LOC && LOC.key===key && Date.now()-LOC.t < 60*60*1000) return;
+    try{ const c=JSON.parse(localStorage.getItem('hujan_loc')||'null'); if(c && c.key===key && Date.now()-c.t < 60*60*1000){ LOC=c; fcImg.clear(); afterData(); return; } }catch(e){}
+    if(locLoading || Date.now()-lastLocFetch < 15000) return;
+    // the free service allows 600 points a minute, so wait a minute after the Malaysia grid was fetched
+    const wait = natFetchedAt ? Math.max(0, natFetchedAt + 62000 - Date.now()) : 62000;
+    locLoading = true;
+    setTimeout(async ()=>{
+      lastLocFetch = Date.now();
+      try{
+        const g = await fetchGrid({id:'loc', w:clon-LOC_SPAN, e:clon+LOC_SPAN, s:clat-LOC_SPAN, n:clat+LOC_SPAN, nx:LOC_N, ny:LOC_N});
+        LOC = {key, t:Date.now(), g}; try{ localStorage.setItem('hujan_loc', JSON.stringify(LOC)); }catch(e){}
+        fcImg.clear(); afterData();
+      }catch(e){}
+      locLoading = false;
+    }, wait);
   }
-  function fieldAt(min){   // values for every grid point at a time, blending between hours
-    const t = Date.now()/1000 + min*60, T = FC.times;
-    // an hourly total belongs to the hour before its timestamp, so centre it half an hour earlier
-    let h = (t - (T[0]-1800)) / 3600; h = Math.max(0, Math.min(T.length-1, h));
-    const h0 = Math.floor(h), h1 = Math.min(T.length-1, h0+1), f = h-h0;
-    const n = FC_N*FC_N, rain = new Float32Array(n), cloud = new Float32Array(n);
-    for(let k=0;k<n;k++){ rain[k] = FC.rain[k][h0]*(1-f) + FC.rain[k][h1]*f; cloud[k] = FC.cloud[k][h0]*(1-f) + FC.cloud[k][h1]*f; }
+  function afterData(){ fcImg.clear(); buildTicks(); renderTime(); updateArrival(); renderCities(); }
+
+  function hourPos(g, min){ // fractional hour index; an hourly total belongs to the hour before its time stamp
+    const t = Date.now()/1000 + min*60, T = g.times;
+    return Math.max(0, Math.min(T.length-1, (t - (T[0]-1800)) / 3600));
+  }
+  function fieldAt(g, min){
+    const h = hourPos(g, min), h0 = Math.floor(h), h1 = Math.min(g.times.length-1, h0+1), f = h-h0;
+    const n = g.nx*g.ny, rain = new Float32Array(n), cloud = new Float32Array(n);
+    for(let k=0;k<n;k++){ rain[k] = g.rain[k][h0]*(1-f) + g.rain[k][h1]*f; cloud[k] = g.cloud[k][h0]*(1-f) + g.cloud[k][h1]*f; }
     return {rain, cloud};
   }
+  function sampleAt(g, arr, lat, lon){ // bilinear value at a place
+    const fx=Math.max(0,Math.min(g.nx-1.0001,(lon-g.w)/(g.e-g.w)*(g.nx-1))), fy=Math.max(0,Math.min(g.ny-1.0001,(g.n-lat)/(g.n-g.s)*(g.ny-1)));
+    const x0=Math.floor(fx), y0=Math.floor(fy), tx=fx-x0, ty=fy-y0, v=(y,x)=>arr[y*g.nx+x];
+    return (v(y0,x0)*(1-tx)+v(y0,x0+1)*tx)*(1-ty) + (v(y0+1,x0)*(1-tx)+v(y0+1,x0+1)*tx)*ty;
+  }
+  function inGrid(g, lat, lon){ return g && lat>=g.s && lat<=g.n && lon>=g.w && lon<=g.e; }
   function cr(p0,p1,p2,p3,t){ const t2=t*t, t3=t2*t; return 0.5*((2*p1)+(-p0+p2)*t+(2*p0-5*p1+4*p2-p3)*t2+(-p0+3*p1-3*p2+p3)*t3); }
-  function upsample(F, S){   // smooth Catmull-Rom upsampling, N x N -> S x S
-    const N=FC_N, tmp=new Float32Array(N*S), out=new Float32Array(S*S), at=(a,i,n)=>a[Math.max(0,Math.min(n-1,i))];
-    for(let r=0;r<N;r++){ const row=F.subarray(r*N,(r+1)*N);
-      for(let x=0;x<S;x++){ const g=x/(S-1)*(N-1), i=Math.floor(g), t=g-i; tmp[r*S+x]=cr(at(row,i-1,N),at(row,i,N),at(row,i+1,N),at(row,i+2,N),t); } }
-    for(let x=0;x<S;x++){ const col=r=>tmp[Math.max(0,Math.min(N-1,r))*S+x];
-      for(let y=0;y<S;y++){ const g=y/(S-1)*(N-1), i=Math.floor(g), t=g-i; out[y*S+x]=Math.max(0,cr(col(i-1),col(i),col(i+1),col(i+2),t)); } }
+  function upsample(F, nx, ny, SW, SH){  // smooth Catmull-Rom upsampling
+    const tmp=new Float32Array(ny*SW), out=new Float32Array(SW*SH);
+    for(let r=0;r<ny;r++){ const at=i=>F[r*nx+Math.max(0,Math.min(nx-1,i))];
+      for(let x=0;x<SW;x++){ const g=x/(SW-1)*(nx-1), i=Math.floor(g), t=g-i; tmp[r*SW+x]=cr(at(i-1),at(i),at(i+1),at(i+2),t); } }
+    for(let x=0;x<SW;x++){ const col=r=>tmp[Math.max(0,Math.min(ny-1,r))*SW+x];
+      for(let y=0;y<SH;y++){ const g=y/(SH-1)*(ny-1), i=Math.floor(g), t=g-i; out[y*SW+x]=Math.max(0,cr(col(i-1),col(i),col(i+1),col(i+2),t)); } }
     return out;
   }
   const RAIN_STOPS = [ // mm per hour → colour, matching the legend
@@ -589,35 +638,44 @@ footer a{color:inherit}
     for(let i=1;i<RAIN_STOPS.length;i++){ if(mm<=RAIN_STOPS[i][0]){ const a=RAIN_STOPS[i-1], b=RAIN_STOPS[i], t=(mm-a[0])/(b[0]-a[0]); return a[1].map((v,k)=>v+(b[1][k]-v)*t); } }
     return RAIN_STOPS[RAIN_STOPS.length-1][1];
   }
-  function forecastImage(min){
-    const key = Math.round(min/15)*15 + (showClouds?'c':'') ;
+  function forecastImage(g, min){
+    const step = Math.round(min/15)*15, key = g.id+':'+step+(showClouds?'c':'');
     if(fcImg.has(key)) return fcImg.get(key);
-    const S = 300, {rain, cloud} = fieldAt(Math.round(min/15)*15);
-    const R = upsample(rain, S), C = showClouds ? upsample(cloud, S) : null;
-    const cv=document.createElement('canvas'); cv.width=S; cv.height=S; const cx=cv.getContext('2d'), img=cx.createImageData(S,S), d=img.data, edge=S*0.12;
+    const {rain, cloud} = fieldAt(g, step);
+    const SW = g.id==='my' ? 900 : 320, SH = Math.round(SW*(g.n-g.s)/(g.e-g.w));
+    const R = upsample(rain, g.nx, g.ny, SW, SH), C = showClouds ? upsample(cloud, g.nx, g.ny, SW, SH) : null;
+    const cv=document.createElement('canvas'); cv.width=SW; cv.height=SH; const cx=cv.getContext('2d'), img=cx.createImageData(SW,SH), d=img.data, edge=Math.min(SW,SH)*0.08;
     const cl = darkMQ.matches ? [205,215,226] : [120,134,148];
-    for(let y=0;y<S;y++) for(let x=0;x<S;x++){
-      const k=y*S+x; let r=0,g=0,b=0,a=0;
-      if(C){ const c=C[k]/100; if(c>0.25){ a=Math.min(0.42,(c-0.25)/0.75*0.42); r=cl[0]; g=cl[1]; b=cl[2]; } }
+    for(let y=0;y<SH;y++) for(let x=0;x<SW;x++){
+      const k=y*SW+x; let r=0,gg=0,b=0,a=0;
+      if(C){ const c=C[k]/100; if(c>0.25){ a=Math.min(0.4,(c-0.25)/0.75*0.4); r=cl[0]; gg=cl[1]; b=cl[2]; } }
       const p = rainRGBA(R[k]);
-      if(p){ const pa=p[3]; r=p[0]*pa+r*(1-pa); g=p[1]*pa+g*(1-pa); b=p[2]*pa+b*(1-pa); a=pa+a*(1-pa); }
-      const e=Math.min(1, Math.min(x,y,S-1-x,S-1-y)/edge); a*=e*e*(3-2*e);
-      const i=k*4; d[i]=r; d[i+1]=g; d[i+2]=b; d[i+3]=a*255;
+      if(p){ const pa=p[3]; r=p[0]*pa+r*(1-pa); gg=p[1]*pa+gg*(1-pa); b=p[2]*pa+b*(1-pa); a=pa+a*(1-pa); }
+      const e=Math.min(1, Math.min(x,y,SW-1-x,SH-1-y)/edge); a*=e*e*(3-2*e);
+      const i=k*4; d[i]=r; d[i+1]=gg; d[i+2]=b; d[i+3]=a*255;
     }
     cx.putImageData(img,0,0);
     const url = cv.toDataURL(); fcImg.set(key, url); return url;
   }
-  function centreRain(min){ if(!FC) return 0; const {rain}=fieldAt(min); return rain[Math.floor(FC_N*FC_N/2)]; }
+  function activeGrid(){ // close-up grid when zoomed in near you, otherwise the whole-country grid
+    const c = map.getCenter(), lg = LOC && LOC.g;
+    if(lg && map.getZoom() >= 8 && inGrid(lg, c.lat, c.lng)) return lg;
+    return NAT || lg || null;
+  }
+  function rainAtPlace(lat, lon, min){
+    const lg = LOC && LOC.g, g = inGrid(lg,lat,lon) ? lg : inGrid(NAT,lat,lon) ? NAT : null;
+    if(!g) return null; return sampleAt(g, fieldAt(g, min).rain, lat, lon);
+  }
 
   /* ---- Timeline ---- */
   function pct(m){ const lo=+$('slider').min, hi=+$('slider').max; return (m-lo)/(hi-lo)*100; }
   function buildTicks(){
-    const lo=+$('slider').min, nowPct=pct(0);
-    $('trackPast').style.width = nowPct+'%';
+    const lo=+$('slider').min;
+    $('trackPast').style.width = pct(0)+'%';
     const marks = [];
-    if(lo<0) marks.push([lo, Math.round(lo/60)<=-2 ? '−2h' : Math.round(lo)+'m']);
+    if(lo<0 && pct(0) > 12) marks.push([lo, '−2h']);
     marks.push([0,'Now']);
-    for(const h of [3,6,9,12]) marks.push([h*60, hShort(Date.now()/1000 + h*3600)]);
+    for(const h of [6,12,18,24]) marks.push([h*60, hShort(Date.now()/1000 + h*3600)]);
     $('ticks').innerHTML = marks.map(([m,t])=>'<span class="'+(m===0?'now':'')+'" style="left:'+pct(m)+'%">'+t+'</span>').join('');
   }
   function renderTime(){
@@ -631,43 +689,98 @@ footer a{color:inherit}
       $('mapBadge').className='map-badge'; $('badgeKind').textContent = ago<=15 ? 'Live radar' : 'Radar';
       $('badgeTime').textContent = f ? hm(f.time)+' · '+(ago<1?'now':ago+' min ago') : '';
       $('mapHint').textContent = 'Rain seen by weather radar. Some areas have no radar coverage.';
-    } else {
-      RV.layers.forEach(l=>l.setOpacity(0));
-      if(!FC){ $('badgeKind').textContent='Forecast'; $('badgeTime').textContent='loading…'; return; }
-      const url = forecastImage(Math.max(0,m));
-      const bounds = [[FC.lat-FC_SPAN, FC.lon-FC_SPAN],[FC.lat+FC_SPAN, FC.lon+FC_SPAN]];
-      if(!fcOverlay){ fcOverlay = L.imageOverlay(url, bounds, {pane:'rain', className:'fc-ov', opacity:0.92}).addTo(map); }
-      else { fcOverlay.setUrl(url); fcOverlay.setBounds(L.latLngBounds(bounds)); fcOverlay.setOpacity(0.92); }
-      const t = Date.now()/1000 + Math.max(0,m)*60, here = centreRain(Math.max(0,m));
-      $('mapBadge').className='map-badge fc'; $('badgeKind').textContent='Forecast';
-      $('badgeTime').textContent = hm(Math.round(t/900)*900) + (m>0 ? ' · in '+(m<60? m+' min' : (m/60).toFixed(m%60?1:0)+' h') : '');
-      $('mapHint').textContent = 'Map centre at this time: ' + (here>=0.15 ? here.toFixed(1)+' mm/h of rain' : 'no rain');
+      return;
     }
+    RV.layers.forEach(l=>l.setOpacity(0));
+    const g = activeGrid();
+    if(!g){ $('mapBadge').className='map-badge fc'; $('badgeKind').textContent='Forecast'; $('badgeTime').textContent='loading…'; return; }
+    const url = forecastImage(g, Math.max(0,m)), bounds = [[g.s, g.w],[g.n, g.e]];
+    if(!fcOverlay){ fcOverlay = L.imageOverlay(url, bounds, {pane:'rain', className:'fc-ov', opacity:0.92}).addTo(map); }
+    else { fcOverlay.setUrl(url); fcOverlay.setBounds(L.latLngBounds(bounds)); fcOverlay.setOpacity(0.92); }
+    const t = Date.now()/1000 + Math.max(0,m)*60;
+    $('mapBadge').className='map-badge fc'; $('badgeKind').textContent='Forecast';
+    $('badgeTime').textContent = hm(Math.round(t/900)*900) + (m>0 ? ' · in '+(m<60? m+' min' : (m/60).toFixed(m%60?1:0)+' h') : '');
+    if(state.lat!==null){ const here = rainAtPlace(state.lat, state.lon, Math.max(0,m));
+      $('mapHint').textContent = here==null ? 'Forecast rain and clouds' : 'At your location then: '+(here>=0.15 ? here.toFixed(1)+' mm/h of rain' : 'no rain'); }
+    else $('mapHint').textContent = 'Forecast rain and clouds across Malaysia';
+  }
+  function firstRain(series, times){ // first coming hour with rain, from an hourly series
+    const now=Date.now()/1000;
+    for(let i=0;i<times.length;i++){
+      if(times[i] <= now) continue;
+      if(series[i] >= 0.3){ const start = Math.max(now, times[i]-3600); return {i, start, mm:series[i], peak:Math.max(...series.slice(i,i+3))}; }
+    }
+    return null;
+  }
+  function placeSeries(lat, lon){
+    const lg = LOC && LOC.g, g = inGrid(lg,lat,lon) ? lg : inGrid(NAT,lat,lon) ? NAT : null;
+    if(!g) return null;
+    const fx=Math.max(0,Math.min(g.nx-1.0001,(lon-g.w)/(g.e-g.w)*(g.nx-1))), fy=Math.max(0,Math.min(g.ny-1.0001,(g.n-lat)/(g.n-g.s)*(g.ny-1)));
+    const x0=Math.floor(fx), y0=Math.floor(fy), tx=fx-x0, ty=fy-y0, k=(y,x)=>y*g.nx+x;
+    const series = g.times.map((_,h)=> (g.rain[k(y0,x0)][h]*(1-tx)+g.rain[k(y0,x0+1)][h]*tx)*(1-ty) + (g.rain[k(y0+1,x0)][h]*(1-tx)+g.rain[k(y0+1,x0+1)][h]*tx)*ty);
+    return {series, times:g.times};
   }
   function updateArrival(){
-    if(!FC) return;
-    const T=FC.times, k=Math.floor(FC_N*FC_N/2), rain=FC.rain[k], now=Date.now()/1000;
-    let msg='No rain expected here in the next 12 hours', sub='Based on the forecast for the map centre.';
-    for(let i=0;i<T.length;i++){
-      if(T[i] < now) continue;
-      if(rain[i] >= 0.3){
-        const start = T[i]-3600 < now ? now : T[i]-3600;
-        const level = rain[i]>=10?'Heavy rain':rain[i]>=2.5?'Moderate rain':'Light rain';
-        msg = (start<=now+600 ? level+' now or very soon' : level+' expected from about '+hm(Math.round(start/900)*900));
-        sub = 'Up to '+Math.max(...rain.slice(i,i+3)).toFixed(1)+' mm/h. Press play to watch it move.';
-        break;
-      }
-    }
+    if(state.lat===null){ return; }
+    const ps = placeSeries(state.lat, state.lon);
+    if(!ps){ $('arrival').lastChild.innerHTML='Your location is outside the Malaysia forecast map<small>Use the hourly bars below for your spot.</small>'; return; }
+    const fr = firstRain(ps.series, ps.times), now=Date.now()/1000;
+    let msg='No rain expected at your location in the next 24 hours', sub='Based on the forecast map.';
+    if(fr){ const level = fr.peak>=10?'Heavy rain':fr.peak>=2.5?'Moderate rain':'Light rain';
+      msg = fr.start<=now+900 ? level+' at your location now or very soon' : level+' expected at your location from about '+hm(Math.round(fr.start/900)*900);
+      sub = 'Up to '+fr.peak.toFixed(1)+' mm/h. Press play to watch it move.'; }
     $('arrival').lastChild.innerHTML = msg+'<small>'+sub+'</small>';
   }
 
-  // Play: radar loop first, then the forecast, then pause and repeat
+  /* ---- Rain across Malaysia: when each town gets rain ---- */
+  const TOWNS = [
+    ['Kuala Lumpur',3.139,101.687,'P'],['Shah Alam',3.073,101.518,'P'],['George Town',5.414,100.329,'P'],['Ipoh',4.598,101.090,'P'],
+    ['Alor Setar',6.121,100.367,'P'],['Kangar',6.441,100.198,'P'],['Kota Bharu',6.125,102.238,'P'],['Kuala Terengganu',5.329,103.137,'P'],
+    ['Kuantan',3.817,103.333,'P'],['Seremban',2.726,101.938,'P'],['Melaka',2.189,102.250,'P'],['Johor Bahru',1.492,103.741,'P'],
+    ['Kuching',1.553,110.359,'B'],['Sibu',2.300,111.817,'B'],['Bintulu',3.171,113.042,'B'],['Miri',4.399,113.991,'B'],
+    ['Labuan',5.280,115.241,'B'],['Kota Kinabalu',5.980,116.073,'B'],['Sandakan',5.840,118.117,'B'],['Tawau',4.245,117.891,'B']
+  ];
+  function cellColor(mm){ const p=rainRGBA(Math.max(mm,0.3)); return 'rgb('+p.slice(0,3).map(Math.round).join(',')+')'; }
+  function renderCities(){
+    if(!NAT) return;
+    const now = Date.now()/1000;
+    // axis
+    const ax=[]; for(const h of [0,6,12,18]) ax.push('<span style="left:'+(h/24*100)+'%">'+(h===0?'Now':hShort(now+h*3600))+'</span>');
+    $('cityAxis').innerHTML = ax.join('');
+    const rows = TOWNS.map(([name,lat,lon,reg])=>{
+      const g = NAT, fx=(lon-g.w)/(g.e-g.w)*(g.nx-1), fy=(g.n-lat)/(g.n-g.s)*(g.ny-1);
+      const x0=Math.floor(fx), y0=Math.floor(fy), tx=fx-x0, ty=fy-y0, k=(y,x)=>y*g.nx+x;
+      const ser = g.times.map((_,h)=> (g.rain[k(y0,x0)][h]*(1-tx)+g.rain[k(y0,x0+1)][h]*tx)*(1-ty) + (g.rain[k(y0+1,x0)][h]*(1-tx)+g.rain[k(y0+1,x0+1)][h]*tx)*ty);
+      const cells=[]; for(let h=0;h<24;h++){ const t=now+h*3600; let idx=g.times.findIndex(T=>T>t); if(idx<0) idx=g.times.length-1; cells.push(ser[idx]); }
+      const fr = firstRain(ser, g.times);
+      return {name,lat,lon,reg,cells,fr};
+    });
+    rows.sort((a,b)=> (a.fr?a.fr.start:9e12) - (b.fr?b.fr.start:9e12));
+    const html = rows.map(r=>{
+      let label='Dry next 24 h', cls='';
+      if(r.fr){ const heavy=r.fr.peak>=10; cls = heavy?'heavy':'wet';
+        label = (r.fr.start<=now+900 ? (heavy?'Heavy rain now':'Rain now') : (heavy?'Heavy rain ':'Rain ')+'from '+hShort(Math.round(r.fr.start/3600)*3600)); }
+      const strip = r.cells.map((mm,h)=> mm>=0.3 ? '<i class="r" style="background:'+cellColor(mm)+'" title="'+hShort(now+h*3600)+': '+mm.toFixed(1)+' mm/h"></i>' : '<i></i>').join('');
+      return '<button type="button" class="city" data-lat="'+r.lat+'" data-lon="'+r.lon+'" data-min="'+(r.fr?Math.max(0,Math.round((r.fr.start-now)/60/15)*15):0)+'">'+
+        '<span class="nm"><b>'+r.name+'</b><small class="'+cls+'">'+label+'</small></span><span class="strip">'+strip+'</span></button>';
+    }).join('');
+    $('cities').innerHTML = html;
+  }
+  $('cities').addEventListener('click', e=>{
+    const b = e.target.closest('.city'); if(!b || !map) return;
+    stopPlay(); tMin = +b.dataset.min; $('slider').value = tMin;
+    map.setView([+b.dataset.lat, +b.dataset.lon], 8);
+    renderTime();
+    $('mapCard').scrollIntoView({behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block:'start'});
+  });
+
+  // Play: radar loop first, then the 24-hour forecast, then pause and repeat
   function stopPlay(){ if(playing){ clearTimeout(playing); playing=null; } $('playIcon').setAttribute('d','M4 2l10 6-10 6z'); $('btnPlay').setAttribute('aria-label','Play'); }
   function playSeq(){
     const seq=[]; const now=Date.now()/1000;
     for(const f of radarFramesToLoad()) seq.push([Math.round((f.time-now)/60), 450]);
     if(!seq.length) seq.push([0,400]);
-    for(let m=15;m<=FUT_MIN;m+=15) seq.push([m, m%60===0?260:160]);
+    for(let m=30;m<=FUT_MIN;m+=30) seq.push([m, m%180===0?300:170]);
     return seq;
   }
   $('btnPlay').addEventListener('click', ()=>{
@@ -680,7 +793,8 @@ footer a{color:inherit}
     })();
   });
   $('slider').addEventListener('input', e=>{ stopPlay(); tMin=+e.target.value; renderTime(); });
-  $('btnClouds').addEventListener('click', ()=>{ showClouds=!showClouds; $('btnClouds').setAttribute('aria-pressed', showClouds); renderTime(); });
+  $('btnClouds').addEventListener('click', ()=>{ showClouds=!showClouds; $('btnClouds').setAttribute('aria-pressed', showClouds); fcImg.clear(); renderTime(); });
+  $('btnMy').addEventListener('click', ()=>{ map.fitBounds(MY_BOUNDS, {padding:[4,4]}); if(tMin<=0 && NAT){ tMin=60; $('slider').value=60; } renderTime(); });
   $('btnSat').addEventListener('click', ()=>{
     useSat=!useSat; $('btnSat').setAttribute('aria-pressed', useSat);
     if(useSat){ map.removeLayer(baseLayer); satLayer.addTo(map); satLabels.addTo(map); } else { map.removeLayer(satLayer); map.removeLayer(satLabels); baseLayer.addTo(map); }
@@ -757,7 +871,7 @@ footer a{color:inherit}
 
   updateAlertUI();
   initMap();
-  setInterval(()=>{ load(); if(map){ loadRadar(); buildTicks(); if(state.lat!==null){ const c=map.getCenter(); loadForecastGrid(c.lat, c.lng, true); } } }, REFRESH_MS);
+  setInterval(()=>{ load(); if(map){ loadRadar(); loadNational(); if(state.lat!==null) loadLocal(state.lat, state.lon); buildTicks(); renderCities(); } }, REFRESH_MS);
   document.addEventListener('visibilitychange', ()=>{ if(!document.hidden && state.data) load(); });
   locate();
 })();
